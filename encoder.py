@@ -1,24 +1,26 @@
 import os
 import tensorflow as tf
-import bert
+# from bert_before_dropout import *
+from bert import *
 from data_helper import *
 
 # TODO: support to add individual new models
+# TODO: ELMo, GPT, ULMFit, fastText, Quick-thoughts, etc.
 
 class NLPEncoder(object):
     """
     1. fit all the layers of encoder, then encoder is a feature extraction;
     2. fit some certain layers and then train other layers
     """
-    def __init__(self, model_name='bert', mode='test'):
+    def __init__(self, FLAGS=None, model_name='bert', mode='test', language='en'):
         self.is_training = True if mode == 'train' else False
         if model_name == 'bert':
-            self.FLAGS = get_bert_flag()
+            self.FLAGS = get_bert_flag(language=language)[1] if FLAGS is None else FLAGS
             self.create_initialize_bert(self.FLAGS.bert_config_file)
 
-        if mode == 'train':
-            # TODO: return the last layer, then you can append a task specific model on it
-            return self.get_output_layer()
+        # if mode == 'train':
+        #     # TODO: return the last layer, then you can append a task specific model on it
+        #     return self.get_output_layer()
 
     def encode(self, texts_a, texts_b=None, mode='cls'):
         """
@@ -35,13 +37,15 @@ class NLPEncoder(object):
         """
         # TODO: do some text preprocessing here
 
-        input_ids, input_mask, segment_ids, _ = TextProcessor.get_processed_ids(self.FLAGS, texts_a, texts_b)
+        data = TextProcessor(self.FLAGS, texts_a, texts_b).data
+        input_ids, input_mask, segment_ids, _ = zip(*data)
         output_layers = self.get_layers()
         if mode == 'cls':
             output_layers = output_layers[-1]
 
-        return self.sess.run(output_layers, feed_dict={'input_ids:0': input_ids})
+        return self.sess.run(output_layers, feed_dict={'input_ids:0': input_ids, "dropout_keep_prob:0": 1.0})
 
+        # return self.sess.run(output_layers, feed_dict={'input_ids:0': input_ids})
 
     def train(self):
         model = self.model
@@ -57,8 +61,8 @@ class NLPEncoder(object):
         sess = tf.Session()
         init_vars = tf.train.list_variables(init_checkpoint)
         kernel = tf.train.load_variable(init_checkpoint, 'bert/encoder/layer_0/output/dense/kernel')
-        bert_config = bert.BertConfig.from_json_file(model_config)
-        model = bert.BertModel(config=bert_config, is_training=False)
+        bert_config = BertConfig.from_json_file(model_config)
+        model = BertModel(config=bert_config)
 
         tvars = tf.trainable_variables()
         assignment_map, initialized_variable_names = bert.get_assignment_map_from_checkpoint(tvars, init_checkpoint)
@@ -74,11 +78,11 @@ class NLPEncoder(object):
     def create_initialize_bert(self, model_config):
         tf.logging.set_verbosity(tf.logging.WARN)
         self.sess = tf.Session()
-        bert_config = bert.BertConfig.from_json_file(model_config)
-        self.model = bert.BertModel(config=bert_config, is_training=self.is_training)
+        bert_config = BertConfig.from_json_file(model_config)
+        self.model = BertModel(config=bert_config)
 
         tvars = tf.trainable_variables()
-        assignment_map, initialized_variable_names = bert.get_assignment_map_from_checkpoint(tvars,
+        assignment_map, initialized_variable_names = get_assignment_map_from_checkpoint(tvars,
                                                                                              self.FLAGS.init_checkpoint)
         tf.train.init_from_checkpoint(self.FLAGS.init_checkpoint, assignment_map)
         self.sess.run(tf.global_variables_initializer())

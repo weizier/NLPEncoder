@@ -1,39 +1,6 @@
 from encoder import NLPEncoder
 from data_helper import *
-
-
-
-
-
-def append_classifier(output_layers):
-    is_training = tf.placeholder(tf.bool)
-    output_layer = output_layers[-1]
-
-    hidden_size = output_layer.shape[-1].value
-
-    output_weights = tf.get_variable(
-        "output_weights", [num_labels, hidden_size],
-        initializer=tf.truncated_normal_initializer(stddev=0.02))
-
-    output_bias = tf.get_variable(
-        "output_bias", [num_labels], initializer=tf.zeros_initializer())
-
-    with tf.variable_scope("loss"):
-        if is_training:
-            # I.e., 0.1 dropout
-            output_layer = tf.nn.dropout(output_layer, keep_prob=0.9)
-
-        logits = tf.matmul(output_layer, output_weights, transpose_b=True)
-        logits = tf.nn.bias_add(logits, output_bias)
-        probabilities = tf.nn.softmax(logits, axis=-1)
-        log_probs = tf.nn.log_softmax(logits, axis=-1)
-
-        one_hot_labels = tf.one_hot(labels, depth=num_labels, dtype=tf.float32)
-
-        per_example_loss = -tf.reduce_sum(one_hot_labels * log_probs, axis=-1)
-        loss = tf.reduce_mean(per_example_loss)
-
-        return (loss, per_example_loss, logits, probabilities)
+from task_specific_model import *
 
 
 def main():
@@ -48,19 +15,41 @@ def main():
     embedding = encoder.encode([text], [text])
 
     # 3. fine-tune the model
-    output_layers = encoder.get_layers()
-    # append something like mlp layers here
-    (loss, per_example_loss, logits, probabilities) = append_classifier(output_layers)
+    data = [('专业NLP请认准知文品牌！', '1'), ('我今天特别开心', '1'), ('糟糕', '0')]
+    my_classifier = Classifier(encoder, data)
+    my_classifier.train()
 
 
-    FLAGS = get_bert_flag()
+def finetune():
+    data = [('专业NLP请认准知文品牌！', '1'), ('我今天特别开心', '1'), ('糟糕', '0')]
+    my_classifier = Classifier(data, 'bert', language='ch')
+    my_classifier.train()
+    my_classifier.predict(texts_a=['专业NLP请认准知文品牌！'])
 
-    tf.gfile.MakeDirs(FLAGS.output_dir)
 
-    input_ids, input_mask, segment_ids, label_ids = get_data(FLAGS)
+def finetune_mrpc():
+    # data_processor = MrpcProcessor(get_bert_flag())
+    my_classifier = Classifier(None, 'bert', language='en', col_num=3, encoder_layer='last')
+    my_classifier.train()
+    my_classifier.predict(texts_a=['专业NLP请认准知文品牌！'])
+    my_classifier.eval()
 
+def tokenization():
+    from data_helper import get_bert_flag
+    import tokenization as tk
+    text1 = '专业NLP请认准知文品牌！'
+    FLAGS1 = get_bert_flag(language='ch')
+    tk1 = tk.FullTokenizer(vocab_file=FLAGS1.vocab_file, do_lower_case=FLAGS1.do_lower_case)
+    print(tk1.tokenize(text1))
 
-
+    from data_helper import get_bert_flag
+    import tokenization as tk
+    text2 = 'NLP is interesting!'
+    FLAGS2 = get_bert_flag(language='en')
+    tk2 = tk.FullTokenizer(vocab_file=FLAGS2.vocab_file, do_lower_case=FLAGS2.do_lower_case)
+    print(tk2.tokenize(text2))
 
 if __name__ == '__main__':
-    tf.app.run()
+    # tf.app.run()
+    # finetune()
+    finetune_mrpc()

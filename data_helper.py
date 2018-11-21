@@ -2,33 +2,40 @@ import os
 import tensorflow as tf
 import optimization
 import tokenization
+import csv
 
-def get_bert_flag():
-    flags = tf.flags
+def get_bert_flag(language='en'):
+    flags = tf.app.flags
 
     FLAGS = flags.FLAGS
 
     ## Required parameters
-    # flags.DEFINE_string(
-    #     "init_checkpoint", "./model/cased_L-12_H-768_A-12/bert_model.ckpt",
-    #     "Initial checkpoint (usually from a pre-trained BERT model).")
-    #
-    # flags.DEFINE_string(
-    #     "bert_config_file", "./model/cased_L-12_H-768_A-12/bert_config.json",
-    #     "The config json file corresponding to the pre-trained BERT model. "
-    #     "This specifies the model architecture.")
 
-    flags.DEFINE_string(
-        "init_checkpoint", "./model/chinese_L-12_H-768_A-12/bert_model.ckpt",
-        "Initial checkpoint (usually from a pre-trained BERT model).")
+    if language == 'en':
+        flags.DEFINE_string(
+            "init_checkpoint", "./model/cased_L-12_H-768_A-12/bert_model.ckpt",
+            "Initial checkpoint (usually from a pre-trained BERT model).")
 
-    flags.DEFINE_string(
-        "bert_config_file", "./model/chinese_L-12_H-768_A-12/bert_config.json",
-        "The config json file corresponding to the pre-trained BERT model. "
-        "This specifies the model architecture.")
+        flags.DEFINE_string(
+            "bert_config_file", "./model/cased_L-12_H-768_A-12/bert_config.json",
+            "The config json file corresponding to the pre-trained BERT model. "
+            "This specifies the model architecture.")
 
-    flags.DEFINE_string("vocab_file", "./model/cased_L-12_H-768_A-12/vocab.txt",
-                        "The vocabulary file that the BERT model was trained on.")
+        flags.DEFINE_string("vocab_file", "./model/cased_L-12_H-768_A-12/vocab.txt",
+                            "The vocabulary file that the BERT model was trained on.")
+
+    else:
+        flags.DEFINE_string(
+            "init_checkpoint", "./model/chinese_L-12_H-768_A-12/bert_model.ckpt",
+            "Initial checkpoint (usually from a pre-trained BERT model).")
+
+        flags.DEFINE_string(
+            "bert_config_file", "./model/chinese_L-12_H-768_A-12/bert_config.json",
+            "The config json file corresponding to the pre-trained BERT model. "
+            "This specifies the model architecture.")
+
+        flags.DEFINE_string("vocab_file", "./model/chinese_L-12_H-768_A-12/vocab.txt",
+                            "The vocabulary file that the BERT model was trained on.")
 
     # Other parameters
     flags.DEFINE_string("task_name", None, "The name of the task to train.")
@@ -38,7 +45,7 @@ def get_bert_flag():
         "The output directory where the model checkpoints will be written.")
 
     flags.DEFINE_string(
-        "data_dir", None,
+        "data_dir", './data/glue_data/MRPC',
         "The input data dir. Should contain the .tsv files (or other data files) "
         "for the task.")
 
@@ -53,6 +60,14 @@ def get_bert_flag():
         "Sequences longer than this will be truncated, and sequences shorter "
         "than this will be padded.")
 
+    flags.DEFINE_bool("use_tpu", False, "Whether to use TPU or GPU/CPU.")
+    return flags, FLAGS
+
+
+def get_classifier_flag():
+    flags, _ = get_bert_flag()
+
+    # from bert
     flags.DEFINE_bool("do_train", False, "Whether to run training.")
 
     flags.DEFINE_bool("do_eval", False, "Whether to run eval on the dev set.")
@@ -65,7 +80,7 @@ def get_bert_flag():
 
     flags.DEFINE_integer("predict_batch_size", 8, "Total batch size for predict.")
 
-    flags.DEFINE_float("learning_rate", 5e-5, "The initial learning rate for Adam.")
+    # flags.DEFINE_float("learning_rate", 5e-5, "The initial learning rate for Adam.")
 
     flags.DEFINE_float("num_train_epochs", 3.0,
                        "Total number of training epochs to perform.")
@@ -81,31 +96,130 @@ def get_bert_flag():
     flags.DEFINE_integer("iterations_per_loop", 1000,
                          "How many steps to make in each estimator call.")
 
-    flags.DEFINE_bool("use_tpu", False, "Whether to use TPU or GPU/CPU.")
+    # path
+    flags.DEFINE_string("training_data_path", "./data/bank_of_china/toy.txt", "Default training data path.")
+    flags.DEFINE_string("validation_data_path", "./data/bank_of_china/toy.txt", "Default validation data path.")
+    flags.DEFINE_string("test_data_path", "./data/bank_of_china/toy.txt", "Default test data path.")
+    flags.DEFINE_string("log_path", "./log/", "Default log path.")
+    flags.DEFINE_string("word2vec_path", "./data/bank_of_china/data_corpus_fasttext_word.vec",
+                        "Default word2vec data path.")
+    flags.DEFINE_string("char2vec_path", "./data/bank_of_china/data_corpus_fasttext_char.vec",
+                        "Default char2vec data path.")
 
-    tf.flags.DEFINE_string(
-        "tpu_name", None,
-        "The Cloud TPU to use for training. This should be either the name "
-        "used when creating the Cloud TPU, or a grpc://ip.address.of.tpu:8470 "
-        "url.")
+    # task and dataset
+    flags.DEFINE_string("language", "chinese", "Default language.")
+    flags.DEFINE_string("task", "boa", "Default task.")
+    flags.DEFINE_string("dataset", "boa", "Default dataset.")
 
-    tf.flags.DEFINE_string(
-        "tpu_zone", None,
-        "[Optional] GCE zone where the Cloud TPU is located in. If not "
-        "specified, we will attempt to automatically detect the GCE project from "
-        "metadata.")
+    # data processing
+    flags.DEFINE_boolean("data_augment", False, "Data augment or not? (default: True)")
+    flags.DEFINE_boolean("balance_data", False, "Data balance or not? (default: True)")
+    flags.DEFINE_boolean("use_parsing", False, "Use parser or not? (default: True)")
 
-    tf.flags.DEFINE_string(
-        "gcp_project", None,
-        "[Optional] Project name for the Cloud TPU-enabled project. If not "
-        "specified, we will attempt to automatically detect the GCE project from "
-        "metadata.")
+    # train
 
-    tf.flags.DEFINE_string("master", None, "[Optional] TensorFlow master URL.")
+    flags.DEFINE_string("visible_gpus", "7", "visible gpus.")
+    flags.DEFINE_float("learning_rate", 5e-5, "Learning rate. (default: 0.001)")
+    flags.DEFINE_float("dropout_keep_prob", 0.9, "Dropout keep probability (default: 0.5)")
+    flags.DEFINE_boolean("use_bn", False, "batch normalization? (default: False)")
+    flags.DEFINE_integer("epoch_num", 3, "epoch number for training")
+    flags.DEFINE_integer("batch_size", 64, "batch size for training")
+    flags.DEFINE_integer("batch_num_to_log", 500, "batch number to print loss")
+    flags.DEFINE_boolean("batch_with_same_length", False, "group training data with similar length? (default: True)")
+    flags.DEFINE_boolean("use_random_valid", False, "random valid selection? (default: False)")
 
-    flags.DEFINE_integer(
-        "num_tpu_cores", 8,
-        "Only used if `use_tpu` is True. Total number of TPU cores to use.")
+    # embedding layer
+    flags.DEFINE_float("random_embedding_scale", 1.0, "random embedding scale (default: 1.0)")
+    # word
+    # flags.DEFINE_integer("max_seq_length", 50, "Max length of each sentence. (default: 50)")
+    flags.DEFINE_boolean("use_random_word_embedding", False, "use random initialized word embedding? (default: False)")
+    flags.DEFINE_integer("word_embedding_dim", 128, "Dimensionality of random word embedding (default: 128)")
+    flags.DEFINE_boolean("dropout_word_embedding", True, "Dropout word embedding or not? (default: True)")
+    flags.DEFINE_boolean("word_embedding_trainable", True, "Word embedding trainable or not? (default: True)")
+    # char
+    flags.DEFINE_integer("max_word_length", 4, "Max length of each word. (default: 10)")
+    flags.DEFINE_boolean("use_char_embed", True, "Use char or not? (default: True)")
+    flags.DEFINE_boolean("use_char_in_word", True, "Use char in word or across word? (default: True)")
+    flags.DEFINE_boolean("use_random_char_embedding", False, "use random initialized char embedding? (default: False)")
+    flags.DEFINE_integer("char_embedding_dim", 20, "Dimensionality of character embedding (default: 8)")
+    flags.DEFINE_string("char_conv_out_channels", "100", "Char convolutional layer out channels.")
+    flags.DEFINE_string("char_conv_windows", "2", "Char convolutional layer filter windows.")
+    # pos
+    flags.DEFINE_boolean("use_pos_embed", False, "Use pos or not? (default: True)")
+    flags.DEFINE_boolean("use_pos_network_embed", False, "Use pos network or not? (default: True)")
+    flags.DEFINE_integer("tag_num", 59, "pos tag number for one hot encoding")
+    # other embedding way
+    flags.DEFINE_boolean("use_self_att_embed", False, "Use self attention in embedding layer or not? (default: True)")
+    flags.DEFINE_boolean("use_gcn_embed", False, "Use gcn in embedding layer or not? (default: True)")
+
+    # encoder layer
+    flags.DEFINE_boolean("use_highway_encoder", True, "Use highway layer or not? (default: True)")
+    flags.DEFINE_integer("highway_layers_num", 5, "Highway_layers_num. (default: 1)")
+    flags.DEFINE_integer("highway_output_size", 300, "Highway output size. (default: 0, same with highway's input)")
+    flags.DEFINE_boolean("use_self_att_encoder", True, "Use self attention in encoder layer or not? (default: True)")
+    flags.DEFINE_boolean("use_gcn_encoder", False, "Use graph convo net in encoder layer or not? (default: True)")
+    flags.DEFINE_integer("gcn_layers_num", 1, "GCN layers num. (default: 1)")
+    flags.DEFINE_integer("gcn_output_size", 300, "GCN output size. (default: 0, same with gcn's input)")
+    flags.DEFINE_boolean("use_bilstm_encoder", True, "Use bilstm in encoder layer or not? (default: True)")
+    flags.DEFINE_integer("bilstm_output_size", 300, "BiLSTM output size. (default: 0, same with its input)")
+    flags.DEFINE_integer("bilstm_stack_num", 5, "BiLSTM stack layers num. (default: 1)")
+    flags.DEFINE_string("encoded_layer_mixed_way", "concat", "Encoder mixed way.")
+
+    # interaction layer
+    flags.DEFINE_boolean("use_gcn_interaction", True, "Use gcn interaction layer? (default: True)")
+    flags.DEFINE_boolean("use_QUAT_interaction", True, "Use QUAT in gcn interaction layer? (default: True)")
+    flags.DEFINE_boolean("use_AUQT_interaction", True, "Use AUQT in gcn interaction layer? (default: True)")
+    flags.DEFINE_integer("gcn_interaction_topk", 3, "GCN word-level interactive graph nodes num. (default: 1)")
+    flags.DEFINE_boolean("use_negative_topk", False, "Use negative max value in gcn interaction layer? (default: True)")
+    flags.DEFINE_boolean("use_gcn_self_interaction", False, "Use gcn self interaction layer? (default: True)")
+    flags.DEFINE_string("interaction_mixed_way", "concat", "Different interaction methods mixed way.")
+
+    # matching layer
+    # flags.DEFINE_boolean("use_full_connect_matching", True, "Use full-connect in matching layer? (default: True)")
+    flags.DEFINE_boolean("use_max_pooling_matching", False, "Use max pooling in matching layer? (default: True)")
+    flags.DEFINE_boolean("use_attentive_pooling_matching", False, "Use attentive matching? (default: True)")
+    flags.DEFINE_boolean("use_dot_attention", True, "use_dot_attention? (default: True)")
+    flags.DEFINE_boolean("global_average_pooling_directly", True, "global_average_pooling_directly? (default: True)")
+    # dense net
+    flags.DEFINE_boolean("use_dense_matching", False, "Use dense network in matching layer or not? (default: True)")
+    flags.DEFINE_boolean("first_scale_down_layer_relu", True, "first_scale_down_layer_relu. (default: True)")
+    flags.DEFINE_float("dense_net_first_scale_down_ratio", 0.3, "dense_net_first_scale_down_ratio. (default: 0.3)")
+    flags.DEFINE_float("dense_net_transition_rate", 0.5, "dense_net_transition_rate. (default: 0.5)")
+    flags.DEFINE_integer("first_scale_down_kernel", 1, "first_scale_down_kernel. (default: 1)")
+    flags.DEFINE_integer("dense_net_growth_rate", 20, "dense_net_growth_rate. (default: 20)")
+    flags.DEFINE_integer("dense_net_layers", 8, "dense_net_layers. (default: 8)")
+    flags.DEFINE_integer("dense_net_kernel_size", 3, "dense_net_kernel_size. (default: 3)")
+
+    # self attention parameters
+    flags.DEFINE_integer("self_attention_num_layer", 5, "self attention embedding layer number. (default: 1)")
+    flags.DEFINE_integer("self_attention_key_dimension", 64, "self attention key projection dimension. (default: 64)")
+    flags.DEFINE_integer("self_attention_value_dimension", 64,
+                         "self attention value projection dimension. (default: 64)")
+    flags.DEFINE_integer("self_attention_num_heads", 8, "self attention number of heads. (default: 8)")
+    flags.DEFINE_boolean("is_residual", True, "whether use residual in self attention layer. (default: True)")
+    flags.DEFINE_boolean("causality", False, "whether use future mask in self attention layer. (default: False)")
+    flags.DEFINE_integer("feed_forward_dim", 256, "self attention feed forward dimension. (default: 2048)")
+
+    # positional encoding parameter
+    flags.DEFINE_boolean("use_position_encoding", False, "whether use position encoding. (default: True)")
+
+    # features_layer
+    flags.DEFINE_integer("features_dim", 796, "Features dimension. (default: 796)")
+
+    # l2
+    flags.DEFINE_boolean("use_l2_loss", False, "Use L2 loss or not? (default: True)")
+    flags.DEFINE_float("lambda_l2", 0.00001, "l2 loss. (default: 0.0)")
+
+    # optimizer
+    flags.DEFINE_string("optimizer_style", "adam", "Train optimizer style.(default: adam)")
+    flags.DEFINE_float("gradient_clip_val", 1.0, "Gradient clip value. (default: 1.0)")
+
+    # device parameters
+    flags.DEFINE_boolean("allow_soft_placement", True, "Allow device soft device placement")
+    flags.DEFINE_boolean("log_device_placement", False, "Log placement of ops on devices")
+
+    # FLAGS = flags._FlagValues()
+    FLAGS = flags.FLAGS
 
     return FLAGS
 
@@ -300,30 +414,89 @@ class DataProcessor(object):
 
 
 class TextProcessor:
-    @staticmethod
-    def get_labels():
-        return ['no_need']
+    def __init__(self, FLAGS, texts_a, texts_b=None, labels=None):
+        self.labels = labels
+        self.label_list = self.get_label_list()
+        self.data = self.get_processed_ids(FLAGS, texts_a, texts_b, labels)
+        self.label_num = self.get_label_num()
 
-    @staticmethod
-    def get_processed_ids(FLAGS, texts_a, texts_b=None):
+    def get_label_num(self):
+        return len(self.label_list)
+
+    def get_labels(self):
+        return self.labels
+
+    def get_label_list(self):
+        if self.labels is None:
+            return ['no_need']
+        return sorted(list(set(self.labels)))
+
+    def get_processed_ids(self, FLAGS, texts_a, texts_b=None, labels=None):
         """Creates examples for the training and dev sets."""
         assert (texts_b is None or len(texts_a) == len(texts_b)), "Number of two sequences must be the same! "
-        label_list = TextProcessor.get_labels()
-        input_ids, input_mask, segment_ids, label_ids = [], [], [], []
+        # input_ids, input_mask, segment_ids, label_ids = [], [], [], []
+        result = []
         tokenizer = tokenization.FullTokenizer(vocab_file=FLAGS.vocab_file, do_lower_case=FLAGS.do_lower_case)
         for (i, text_a) in enumerate(texts_a):
             if i % 10000 == 0:
                 tf.logging.info("Processing example %d." % i)
             guid = "%s-%s" % ("encode", i)
             text_a = tokenization.convert_to_unicode(text_a)
-            label = label_list[0]
+            label = self.label_list[0] if labels is None else labels[i]
             text_b = None
             if texts_b is not None:
-                text_b = tokenization.convert_to_unicode(text_b)
+                text_b = tokenization.convert_to_unicode(texts_b[i])
 
             example = InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label)
 
-            feature = convert_single_example(i, example, label_list, FLAGS.max_seq_length, tokenizer)
+            feature = convert_single_example(i, example, self.label_list, FLAGS.max_seq_length, tokenizer)
+
+            # input_ids.append(feature.input_ids)
+            # input_mask.append(feature.input_mask)
+            # segment_ids.append(feature.segment_ids)
+            # label_ids.append(feature.label_id)
+            result.append((feature.input_ids, feature.input_mask, feature.segment_ids, feature.label_id))
+
+        return result
+
+
+class ClassifierProcessor(DataProcessor):
+
+    def __init__(self, FLAGS, filepath, col_num=2):
+        self.FLAGS = FLAGS
+        examples = self.get_train_examples(filepath, col_num)
+        self.label_list = self.get_label_list()
+        self.data = self.get_train_data(examples)
+
+    def get_labels(self):
+        return self.labels
+
+    def get_label_list(self):
+        if self.labels is None:
+            return ['no_need']
+        return sorted(list(set(self.labels)))
+
+    def get_train_examples(self, filepath, col_num=2):
+        """See base class."""
+        lines = self._read_tsv(filepath)
+        self.labels, examples = [], []
+        for (i, line) in enumerate(lines):
+            if i == 0:
+                continue
+            guid = "%d" % (i)
+            assert len(line) == col_num, "Real column number is not equal with col_num on %d!" % i
+            text_a = tokenization.convert_to_unicode(line[0])
+            text_b = None if col_num == 2 else tokenization.convert_to_unicode(line[1])
+            label = tokenization.convert_to_unicode(line[-1])
+            self.labels.append(label)
+            example = InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label)
+            examples.append(example)
+
+    def get_train_data(self, examples):
+        tokenizer = tokenization.FullTokenizer(vocab_file=self.FLAGS.vocab_file, do_lower_case=self.FLAGS.do_lower_case)
+        input_ids, input_mask, segment_ids, label_ids = [], [], [], []
+        for i, example in enumerate(examples):
+            feature = convert_single_example(i, example, self.label_list, self.FLAGS.max_seq_length, tokenizer)
 
             input_ids.append(feature.input_ids)
             input_mask.append(feature.input_mask)
@@ -424,43 +597,66 @@ class MnliProcessor(DataProcessor):
 
 
 class MrpcProcessor(DataProcessor):
-  """Processor for the MRPC data set (GLUE version)."""
+    """Processor for the MRPC data set (GLUE version)."""
 
-  def get_train_examples(self, data_dir):
-    """See base class."""
-    return self._create_examples(
+    def __init__(self, FLAGS):
+        self.FLAGS = FLAGS
+        self.label_list = self.get_labels()
+        self.data_dir = self.FLAGS.data_dir
+        self.label_num = 2
+
+    def get_train_examples(self, data_dir):
+        """See base class."""
+        return self._create_examples(
         self._read_tsv(os.path.join(data_dir, "train.tsv")), "train")
 
-  def get_dev_examples(self, data_dir):
-    """See base class."""
-    return self._create_examples(
+    def get_dev_examples(self, data_dir):
+        """See base class."""
+        return self._create_examples(
         self._read_tsv(os.path.join(data_dir, "dev.tsv")), "dev")
 
-  def get_test_examples(self, data_dir):
-    """See base class."""
-    return self._create_examples(
-      self._read_tsv(os.path.join(data_dir, "test.tsv")), "test")
+    def get_test_examples(self, data_dir):
+        """See base class."""
+        return self._create_examples(
+        self._read_tsv(os.path.join(data_dir, "test.tsv")), "test")
 
-  def get_labels(self):
-    """See base class."""
-    return ["0", "1"]
+    def get_labels(self):
+        """See base class."""
+        return ["0", "1"]
 
-  def _create_examples(self, lines, set_type):
-    """Creates examples for the training and dev sets."""
-    examples = []
-    for (i, line) in enumerate(lines):
-      if i == 0:
-        continue
-      guid = "%s-%s" % (set_type, i)
-      text_a = tokenization.convert_to_unicode(line[3])
-      text_b = tokenization.convert_to_unicode(line[4])
-      if set_type == "test":
-        label = "0"
-      else:
-        label = tokenization.convert_to_unicode(line[0])
-      examples.append(
-          InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
-    return examples
+    def _create_examples(self, lines, set_type):
+        """Creates examples for the training and dev sets."""
+        examples = []
+        for (i, line) in enumerate(lines):
+            if i == 0:
+                continue
+            guid = "%s-%s" % (set_type, i)
+            text_a = tokenization.convert_to_unicode(line[3])
+            text_b = tokenization.convert_to_unicode(line[4])
+            if set_type == "test":
+                label = "0"
+            else:
+                label = tokenization.convert_to_unicode(line[0])
+            examples.append(
+              InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
+        return examples
+
+    def get_data(self, data_style='train'):
+        assert data_style in ['train', 'eval', 'test'], "data_style must be train, eval or test"
+        if data_style == 'train':
+            examples = self.get_train_examples(self.data_dir)
+        elif data_style == 'eval':
+            examples = self.get_dev_examples(self.data_dir)
+        else:
+            examples = self.get_test_examples(self.data_dir)
+        tokenizer = tokenization.FullTokenizer(vocab_file=self.FLAGS.vocab_file, do_lower_case=self.FLAGS.do_lower_case)
+        # input_ids, input_mask, segment_ids, label_ids = [], [], [], []
+        result = []
+        for i, example in enumerate(examples):
+            feature = convert_single_example(i, example, self.label_list, self.FLAGS.max_seq_length, tokenizer)
+            result.append((feature.input_ids, feature.input_mask, feature.segment_ids, feature.label_id))
+        return result
+
 
 
 class ColaProcessor(DataProcessor):

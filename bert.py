@@ -129,7 +129,7 @@ class BertModel(object):
 
     def __init__(self,
                  config,
-                 is_training,
+                 # is_training,
                  # input_ids,
                  input_mask=None,
                  token_type_ids=None,
@@ -155,11 +155,13 @@ class BertModel(object):
         is invalid.
     """
         config = copy.deepcopy(config)
-        if not is_training:
-            config.hidden_dropout_prob = 0.0
-            config.attention_probs_dropout_prob = 0.0
+        # if not is_training:
+        #     config.hidden_dropout_prob = 0.0
+        #     config.attention_probs_dropout_prob = 0.0
 
         input_ids = tf.placeholder(dtype=tf.int32, shape=(None, None), name="input_ids")
+        dropout_keep_prob = tf.placeholder(dtype=tf.float32, shape=(), name="dropout_keep_prob")
+        self.dropout_keep_prob = dropout_keep_prob
         # input_ids = tf.constant([[3,4,5],[5,3,2]], name="input_ids")
         input_shape = get_shape_list(input_ids, expected_rank=2)
         batch_size = input_shape[0]
@@ -194,7 +196,7 @@ class BertModel(object):
                     position_embedding_name="position_embeddings",
                     initializer_range=config.initializer_range,
                     max_position_embeddings=config.max_position_embeddings,
-                    dropout_prob=config.hidden_dropout_prob)
+                    dropout_keep_prob=dropout_keep_prob)
 
             with tf.variable_scope("encoder"):
                 # This converts a 2D mask of shape [batch_size, seq_length] to a 3D
@@ -213,8 +215,8 @@ class BertModel(object):
                     num_attention_heads=config.num_attention_heads,
                     intermediate_size=config.intermediate_size,
                     intermediate_act_fn=get_activation(config.hidden_act),
-                    hidden_dropout_prob=config.hidden_dropout_prob,
-                    attention_probs_dropout_prob=config.attention_probs_dropout_prob,
+                    hidden_dropout_keep_prob=dropout_keep_prob,
+                    attention_probs_dropout_keep_prob=dropout_keep_prob,
                     initializer_range=config.initializer_range,
                     do_return_all_layers=True)
 
@@ -344,7 +346,7 @@ def get_assignment_map_from_checkpoint(tvars, init_checkpoint):
     return (assignment_map, initialized_variable_names)
 
 
-def dropout(input_tensor, dropout_prob):
+def dropout(input_tensor, dropout_keep_prob):
     """Perform dropout.
 
   Args:
@@ -355,10 +357,10 @@ def dropout(input_tensor, dropout_prob):
   Returns:
     A version of `input_tensor` with dropout applied.
   """
-    if dropout_prob is None or dropout_prob == 0.0:
+    if dropout_keep_prob is None:
         return input_tensor
 
-    output = tf.nn.dropout(input_tensor, 1.0 - dropout_prob)
+    output = tf.nn.dropout(input_tensor, dropout_keep_prob)
     return output
 
 
@@ -368,10 +370,10 @@ def layer_norm(input_tensor, name=None):
         inputs=input_tensor, begin_norm_axis=-1, begin_params_axis=-1, scope=name)
 
 
-def layer_norm_and_dropout(input_tensor, dropout_prob, name=None):
+def layer_norm_and_dropout(input_tensor, dropout_keep_prob, name=None):
     """Runs layer normalization followed by dropout."""
     output_tensor = layer_norm(input_tensor, name)
-    output_tensor = dropout(output_tensor, dropout_prob)
+    output_tensor = dropout(output_tensor, dropout_keep_prob)
     return output_tensor
 
 
@@ -438,7 +440,7 @@ def embedding_postprocessor(input_tensor,
                             position_embedding_name="position_embeddings",
                             initializer_range=0.02,
                             max_position_embeddings=512,
-                            dropout_prob=0.1):
+                            dropout_keep_prob=0.9):
     """Performs various post-processing on a word embedding tensor.
 
     Args:
@@ -534,7 +536,7 @@ def embedding_postprocessor(input_tensor,
                                          position_broadcast_shape)
         output += position_embeddings
 
-    output = layer_norm_and_dropout(output, dropout_prob)
+    output = layer_norm_and_dropout(output, dropout_keep_prob)
     return output
 
 
@@ -580,7 +582,7 @@ def attention_layer(from_tensor,
                     query_act=None,
                     key_act=None,
                     value_act=None,
-                    attention_probs_dropout_prob=0.0,
+                    attention_probs_dropout_keep_prob=1.0,
                     initializer_range=0.02,
                     do_return_2d_tensor=False,
                     batch_size=None,
@@ -738,7 +740,7 @@ def attention_layer(from_tensor,
 
     # This is actually dropping out entire tokens to attend to, which might
     # seem a bit unusual, but is taken from the original Transformer paper.
-    attention_probs = dropout(attention_probs, attention_probs_dropout_prob)
+    attention_probs = dropout(attention_probs, attention_probs_dropout_keep_prob)
 
     # `value_layer` = [B, T, N, H]
     value_layer = tf.reshape(
@@ -775,8 +777,8 @@ def transformer_model(input_tensor,
                       num_attention_heads=12,
                       intermediate_size=3072,
                       intermediate_act_fn=gelu,
-                      hidden_dropout_prob=0.1,
-                      attention_probs_dropout_prob=0.1,
+                      hidden_dropout_keep_prob=0.9,
+                      attention_probs_dropout_keep_prob=0.9,
                       initializer_range=0.02,
                       do_return_all_layers=False):
     """Multi-headed, multi-layer Transformer from "Attention is All You Need".
@@ -853,7 +855,7 @@ def transformer_model(input_tensor,
                         attention_mask=attention_mask,
                         num_attention_heads=num_attention_heads,
                         size_per_head=attention_head_size,
-                        attention_probs_dropout_prob=attention_probs_dropout_prob,
+                        attention_probs_dropout_keep_prob=attention_probs_dropout_keep_prob,
                         initializer_range=initializer_range,
                         do_return_2d_tensor=True,
                         batch_size=batch_size,
@@ -876,7 +878,7 @@ def transformer_model(input_tensor,
                         attention_output,
                         hidden_size,
                         kernel_initializer=create_initializer(initializer_range))
-                    attention_output = dropout(attention_output, hidden_dropout_prob)
+                    attention_output = dropout(attention_output, hidden_dropout_keep_prob)
                     attention_output = layer_norm(attention_output + layer_input)
 
             # The activation is only applied to the "intermediate" hidden layer.
@@ -893,7 +895,7 @@ def transformer_model(input_tensor,
                     intermediate_output,
                     hidden_size,
                     kernel_initializer=create_initializer(initializer_range))
-                layer_output = dropout(layer_output, hidden_dropout_prob)
+                layer_output = dropout(layer_output, hidden_dropout_keep_prob)
                 layer_output = layer_norm(layer_output + attention_output)
                 prev_output = layer_output
                 all_layer_outputs.append(layer_output)
