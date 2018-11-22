@@ -426,6 +426,9 @@ class TextProcessor:
     def get_labels(self):
         return self.labels
 
+    def get_data(self, mode='train'):
+        return self.data
+
     def get_label_list(self):
         if self.labels is None:
             return ['no_need']

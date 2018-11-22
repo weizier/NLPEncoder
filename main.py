@@ -51,5 +51,5 @@ def tokenization():
 
 if __name__ == '__main__':
     # tf.app.run()
-    # finetune()
-    finetune_mrpc()
+    finetune()
+    # finetune_mrpc()

@@ -19,7 +19,7 @@ class TaskSpecificModel:
 
 class Classifier(TaskSpecificModel):
 
-    def __init__(self, path_or_data, encoder='bert', language='en', col_num=2, encoder_layer='last'):
+    def __init__(self, path_or_data, encoder='bert', language='en', col_num=2, encoder_layer='attention'):
         self.FLAGS = get_classifier_flag()
         self.encoder = self.get_encoder(encoder, language)
         self.dropout_keep_prob = self.encoder.model.dropout_keep_prob
