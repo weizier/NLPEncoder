@@ -24,8 +24,8 @@ class Classifier(TaskSpecificModel):
         self.encoder = self.get_encoder(encoder, language)
         self.dropout_keep_prob = self.encoder.model.dropout_keep_prob
         self.sess = self.encoder.sess
-        data_processor = MrpcProcessor(self.encoder.FLAGS)
-        path_or_data = data_processor
+        # data_processor = MrpcProcessor(self.encoder.FLAGS)
+        # path_or_data = data_processor
         self.build_data_manager(path_or_data, col_num)  # you can change the data manager when training
         self.create_placeholders()
 

@@ -124,7 +124,7 @@ def get_classifier_flag():
     flags.DEFINE_boolean("use_bn", False, "batch normalization? (default: False)")
     flags.DEFINE_integer("epoch_num", 3, "epoch number for training")
     flags.DEFINE_integer("batch_size", 64, "batch size for training")
-    flags.DEFINE_integer("batch_num_to_log", 500, "batch number to print loss")
+    flags.DEFINE_integer("batch_num_to_log", 5, "batch number to print loss")
     flags.DEFINE_boolean("batch_with_same_length", False, "group training data with similar length? (default: True)")
     flags.DEFINE_boolean("use_random_valid", False, "random valid selection? (default: False)")
 
