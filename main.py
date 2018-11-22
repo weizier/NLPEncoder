@@ -21,8 +21,8 @@ def main():
 
 
 def finetune():
-    data = [('专业NLP请认准知文品牌！', '1'), ('我今天特别开心', '1'), ('糟糕', '0')]
-    my_classifier = Classifier(data, 'bert', language='ch')
+    data = [('专业NLP请认准知文品牌！','dfdf', '1'), ('我今天特别开心','dfdf', '1'), ('糟糕','fddfdsf', '0')]
+    my_classifier = Classifier(data, 'bert', language='ch', col_num=3)
     my_classifier.train()
     my_classifier.predict(texts_a=['专业NLP请认准知文品牌！'])
 
