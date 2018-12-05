@@ -42,6 +42,8 @@ class NLPEncoder(object):
         output_layers = self.get_layers()
         if mode == 'cls':
             output_layers = output_layers[-1]
+        self.sess = tf.Session()
+        self.sess.run(tf.global_variables_initializer())
 
         return self.sess.run(output_layers, feed_dict={'input_ids:0': input_ids, "dropout_keep_prob:0": 1.0})
 
@@ -77,7 +79,7 @@ class NLPEncoder(object):
 
     def create_initialize_bert(self, model_config):
         tf.logging.set_verbosity(tf.logging.WARN)
-        self.sess = tf.Session()
+        # self.sess = tf.Session()
         bert_config = BertConfig.from_json_file(model_config)
         self.model = BertModel(config=bert_config)
 
@@ -85,7 +87,7 @@ class NLPEncoder(object):
         assignment_map, initialized_variable_names = get_assignment_map_from_checkpoint(tvars,
                                                                                              self.FLAGS.init_checkpoint)
         tf.train.init_from_checkpoint(self.FLAGS.init_checkpoint, assignment_map)
-        self.sess.run(tf.global_variables_initializer())
+        # self.sess.run(tf.global_variables_initializer())
         # tf.logging.info("**** Trainable Variables ****")
         # for var in tvars:
         #     init_string = ""

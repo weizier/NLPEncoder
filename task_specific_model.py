@@ -3,6 +3,8 @@ from data_helper import *
 import time
 import random
 from encoder import NLPEncoder
+from tensorflow.python.client import timeline
+from sklearn.metrics import classification_report
 
 # TODO: Squad, seq2seq, crf, qa,
 
@@ -18,52 +20,51 @@ class TaskSpecificModel:
 
 
 class Classifier(TaskSpecificModel):
+    """
+    TODO: finetuning on 1M rows of data take 24 hours, two ways to solve it:
+        1. finetune all layers some time, then cache the output of bert and just finetune classifier layer
+        2. try multiple gpus
+    """
 
-    def __init__(self, path_or_data, encoder='bert', language='en', col_num=2, encoder_layer='attention'):
+    def __init__(self, encoder='bert', language='en', comebine_encoder_mode='cls', feature_mode='max', finetune_scope='classifier', path_or_data='mrpc', col_num=3):
         self.FLAGS = get_classifier_flag()
+        os.environ["CUDA_VISIBLE_DEVICES"] = self.FLAGS.visible_gpus
         self.encoder = self.get_encoder(encoder, language)
         self.dropout_keep_prob = self.encoder.model.dropout_keep_prob
-        self.sess = self.encoder.sess
-        # data_processor = MrpcProcessor(self.encoder.FLAGS)
-        # path_or_data = data_processor
-        self.build_data_manager(path_or_data, col_num)  # you can change the data manager when training
+        self.sess = self.get_session()
+        self.dm = build_data_processor(self.FLAGS, path_or_data, col_num)  # you can change the data manager when training
         self.create_placeholders()
 
         with tf.variable_scope("classifier"):
             self.global_step = tf.Variable(0, trainable=False, dtype=tf.int32)
-            self.encoder_output = self.get_encoder_output(mode=encoder_layer)
-            self.features = self.get_features(mode='mlp')
+            self.encoder_output = self.get_encoder_output(comebine_encoder_mode=comebine_encoder_mode)
+            self.features = self.get_features(feature_mode)
             self.logits = self.build_output_layer()
-
             self.compute_loss_acc()
-            self.get_train_op()
+            self.get_train_op(finetune_scope)
+
+        self.sess.run(tf.global_variables_initializer())
+        self.build_saved_path()
+        self.is_restored = False
 
     def get_encoder(self, encoder='bert', language='en'):
         return NLPEncoder(FLAGS=self.FLAGS, model_name=encoder, language=language)
 
+    def get_session(self):
+        config = tf.ConfigProto(graph_options=tf.GraphOptions(
+            optimizer_options=tf.OptimizerOptions(opt_level=tf.OptimizerOptions.L0)))
+        config.gpu_options.allow_growth = True
+        # config.log_device_placement = True
+        sess = tf.Session(config=config)
+        # self.sess = tf.Session()
+        # data_processor = MrpcProcessor(self.encoder.FLAGS)
+        # path_or_data = data_processor
+        return sess
+
     def create_placeholders(self):
         self.y = tf.placeholder(dtype=tf.int64, shape=None, name="y")
 
-    def build_data_manager(self, path_or_data, col_num):
-        assert isinstance(path_or_data, (str, list, MnliProcessor, ColaProcessor, MrpcProcessor, ClassifierProcessor,
-                                         XnliProcessor)), "Make sure path_or_data is a filepath or list of data!"
-
-        if isinstance(path_or_data, (MnliProcessor, ColaProcessor, MrpcProcessor, ClassifierProcessor, XnliProcessor)):
-            self.dm = path_or_data
-        if isinstance(path_or_data, str):
-            self.dm = ClassifierProcessor(self.encoder.FLAGS, path_or_data, col_num)
-        if isinstance(path_or_data, list):
-            if col_num == 2:
-                texts_a, labels = zip(*path_or_data)
-                texts_b = None
-            elif col_num == 3:
-                texts_a, texts_b, labels = zip(*path_or_data)
-            else:
-                raise ValueError
-            self.dm = TextProcessor(self.encoder.FLAGS, texts_a, texts_b, labels)
-
-
-    def get_encoder_output(self, mode='attention'):
+    def get_encoder_output(self, comebine_encoder_mode='cls'):
         """
         :param mode: 'attention' is a softmax weight on all of the layers;
                       'last' just use the last layer of encoder(but 'cls' token in bert)
@@ -72,11 +73,13 @@ class Classifier(TaskSpecificModel):
         """
         self.encoder_layers = self.encoder.get_layers()
 
-        assert mode in ['attention', 'last', 'let_me_do'], "Specify a mode in ['attention', 'last', 'let_me_do']"
-        if mode == 'let_me_do':
+        assert comebine_encoder_mode in ['attention', 'cls', 'last', 'let_me_do'], "Specify a mode in ['attention', 'last', 'let_me_do']"
+        if comebine_encoder_mode == 'let_me_do':
             return self.encoder_layers   # [13 * (batch_size, seq_length, hidden_size) + (batch_size, hidden_size)]
-        elif mode == 'last':
+        elif comebine_encoder_mode == 'cls':
             return tf.expand_dims(self.encoder_layers[-1], 1)  # (batch_size, 1, hidden_size)
+        elif comebine_encoder_mode == 'last':
+            return self.encoder_layers[-2]  # (batch_size, seq_length, hidden_size)
 
         with tf.variable_scope("attention_combine"):
             hidden_size = self.encoder_layers[0].shape[-1].value
@@ -85,46 +88,66 @@ class Classifier(TaskSpecificModel):
                 "attention_combine_weights", [hidden_size, hidden_size],
                 initializer=tf.truncated_normal_initializer(stddev=0.02))
 
-            combine_bias = tf.get_variable(
-                "attention_combine_bias", [hidden_size], initializer=tf.zeros_initializer())
+            # combine_bias = tf.get_variable(
+            #     "attention_combine_bias", [hidden_size], initializer=tf.zeros_initializer())
+            combine_v = tf.get_variable(
+                "attention_combine_v", [hidden_size], initializer=tf.truncated_normal_initializer(stddev=0.02))
             # [13 * (batch_size, seq_length, hidden_size)] --> (batch_size, seq_length, 13, hidden_size)
             self.combine_in = tf.concat([tf.expand_dims(layer, axis=2) for layer in self.encoder_layers[:-1]], axis=2)
             combine_in_shape = tf.shape(self.combine_in)# self.combine_in.shape
-            self.combine_e = tf.nn.relu(tf.nn.xw_plus_b(tf.reshape(self.combine_in, [-1, hidden_size]),
-                                                        combine_weights, combine_bias))
-            self.combine_e = tf.reshape(self.combine_e, combine_in_shape)
-
-            self.combine_e = tf.nn.dropout(self.combine_e, keep_prob=self.dropout_keep_prob)
-
+            self.combine_e = tf.nn.tanh(tf.matmul(tf.reshape(self.combine_in, [-1, hidden_size]), combine_weights))
+            self.combine_e = tf.reshape(self.combine_e, combine_in_shape)  # (batch_size, seq_length, 13, hidden_size)
+            self.combine_e = tf.reduce_sum(combine_v * self.combine_e, -1)  # (batch_size, seq_length, 13)
+            # self.combine_e = tf.nn.dropout(self.combine_e, keep_prob=self.dropout_keep_prob)
             # (batch_size, seq_length, 13, hidden_size) --> (batch_size, seq_length, hidden_size)
-            encoder_output = tf.reduce_sum(tf.nn.softmax(self.combine_e, 2) * self.combine_in, axis=2)
+            encoder_output = tf.squeeze(tf.matmul(tf.expand_dims(tf.nn.softmax(self.combine_e), 2), self.combine_in), 2)
+            encoder_output = tf.nn.dropout(encoder_output, keep_prob=self.dropout_keep_prob)
             return encoder_output  # (batch_size, seq_length, hidden_size)
 
-    def get_features(self, mode='mlp'):
+    def get_features(self, mode='max'):
         # TODO: cnn, bilstm
-        assert mode in ['mlp', 'cnn', 'bilstm'], "Classifier mode should be in ['mlp', 'cnn', 'bilstm']"
+        assert mode in ['max', 'mlp', 'cnn', 'bilstm', 'attention'], "Classifier mode should be in ['mlp', 'cnn', 'bilstm']"
         self.encoder_hidden_size = self.encoder_output.shape[-1].value
+        encoder_output_shape = tf.shape(self.encoder_output)
         with tf.variable_scope("feature_layer"):
             if mode == 'mlp':
                 mlp_weights = tf.get_variable("mlp_weights", [self.encoder_hidden_size, self.FLAGS.features_dim],
                                               initializer=tf.truncated_normal_initializer(stddev=0.02))
                 mlp_bias = tf.get_variable("mlp_bias", [self.FLAGS.features_dim], initializer=tf.zeros_initializer())
-                encoder_output_shape = tf.shape(self.encoder_output)
                 # encoder_output_shape[-1] = self.FLAGS.features_dim
                 features_shape = [encoder_output_shape[0], encoder_output_shape[1], self.FLAGS.features_dim]
                 # features = tf.add(tf.matmul(self.encoder_output, mlp_weights), mlp_bias, name='features')
                 features = tf.nn.xw_plus_b(tf.reshape(self.encoder_output, (-1, self.encoder_hidden_size)),
                                            mlp_weights, mlp_bias, name='features')
+                # (batch_size, seq_length, features_dim)
                 features = tf.nn.relu(tf.reshape(features, shape=features_shape))
                 features = tf.nn.dropout(features, keep_prob=self.dropout_keep_prob)
                 features = tf.reduce_max(features, axis=1)
-                return features  # (batch_size, hidden_size)
+                return features  # (batch_size, features_dim)
+            elif mode == 'max':
+                return tf.reduce_max(self.encoder_output, axis=1)
+            elif mode == 'attention':
+                attention_w = tf.get_variable('feature_attention_w', [self.encoder_hidden_size, self.FLAGS.features_dim],
+                                              initializer=tf.truncated_normal_initializer(stddev=0.02))
+                attention_v = tf.get_variable('feature_attention_v', [self.FLAGS.features_dim],
+                                              initializer=tf.truncated_normal_initializer(stddev=0.02))
+
+                # (batch_size * seq_len, hidden_size) --> (batch_size * seq_len, features_dim)
+                e = tf.nn.tanh(tf.matmul(tf.reshape(self.encoder_output, (-1, self.encoder_hidden_size)), attention_w))
+
+                # (batch_size * seq_len, features_dim) --> (batch_size * seq_len) --> (batch_size, seq_len)
+                e = tf.reshape(tf.reduce_sum(attention_v * e, -1), [encoder_output_shape[0], encoder_output_shape[1]])
+                alpha = tf.nn.softmax(e)  # (batch_size, seq_len)
+
+                features = tf.squeeze(tf.matmul(tf.expand_dims(alpha, 1), self.encoder_output), 1)
+
+                return features
 
     def build_output_layer(self):
         with tf.variable_scope("output_layer"):
-            # self.features.get_shape()[-1]
+            features_dim = self.features.get_shape()[-1]
             classes_num = self.dm.label_num
-            output_W = tf.get_variable('output_W', shape=[self.FLAGS.features_dim, classes_num], dtype=tf.float32,
+            output_W = tf.get_variable('output_W', shape=[features_dim, classes_num], dtype=tf.float32,
                                        initializer=tf.truncated_normal_initializer(stddev=0.02))
             output_b = tf.get_variable('output_b', shape=[classes_num], dtype=tf.float32, initializer=tf.zeros_initializer())
             logits = tf.nn.xw_plus_b(self.features, output_W, output_b)
@@ -163,34 +186,157 @@ class Classifier(TaskSpecificModel):
                 "Please make sure finetune_scope right!"
 
         self.trainable_variables = tf.trainable_variables()
-        # print(self.trainable_variables)
+        # tvars = []
+        print("*******All trainable variables********")
+        print(len(self.trainable_variables))
+        print('\n'.join([str(var) for var in self.trainable_variables]))
+        print('\n')
+        if finetune_scope == 'classifier':
+            tvars = [var for var in self.trainable_variables if 'bert' not in var.name]
+            self.trainable_variables = tvars
+            print("*******Classifier trainable variables********")
+            print(len(self.trainable_variables))
+            print('\n'.join([str(var) for var in self.trainable_variables]))
+            print('\n')
+
 
         self.gradients, _ = tf.clip_by_global_norm(tf.gradients(self.loss, self.trainable_variables), clip_norm=self.FLAGS.gradient_clip_val)
         self.train_op = optimizer.apply_gradients(zip(self.gradients, self.trainable_variables), global_step=self.global_step)
 
-    def train(self):
+    def build_saved_path(self):
+        self.saver_saved_dir = self.FLAGS.output_dir + "/{}/saver/".format(self.FLAGS.task_name)
+        self.saver_saved_path = self.saver_saved_dir + 'best2'
+        self.builder_saved_dir = self.FLAGS.output_dir + "/{}/builder/".format(self.FLAGS.task_name)
+        self.builder_saved_path = self.builder_saved_dir
+
+    def restore_model(self, saver_saved_dir, saver_saved_path):
+        saver = tf.train.Saver()
+        if os.path.exists(saver_saved_dir):
+            print("restore model from {}".format(saver_saved_dir))
+            saver.restore(self.sess, saver_saved_path)
+            self.is_restored = True
+            print("restore model done.")
+        else:
+            raise FileNotFoundError("File not exists.")
+        return saver
+
+    def cache_nodes_value(self, finetune_scope, comebine_encoder_mode, data, path):
+        # data = self.dm.get_data('train')
+        if finetune_scope == 'classifier':
+            for current_batch_index, start in enumerate(range(0, len(data), self.FLAGS.batch_size)):
+                batch_data = data[start:start+self.FLAGS.batch_size]
+                input_ids, input_mask, segment_ids, label_ids = zip(*batch_data)
+                feed_dict = {'input_ids:0': input_ids, 'dropout_keep_prob:0': 1.0}
+
+                # [13 * (batch_size, seq_length, hidden_size) + (batch_size, hidden_size)]
+                encoder_layers_value = self.sess.run(self.encoder_layers, feed_dict=feed_dict)
+
+                encoder_feed_dict = {}
+                if comebine_encoder_mode == 'cls':
+                    pickle.dump(encoder_layers_value[-1], "{}_{}_cls.cache".format(path, current_batch_index))
+                elif comebine_encoder_mode == 'last':
+                    pickle.dump(encoder_layers_value[-2], "{}_{}_last.cache".format(path, current_batch_index))
+                elif comebine_encoder_mode == 'attention':
+                    pickle.dump(encoder_layers_value[:-1], "{}_{}_att.cache".format(path, current_batch_index))
+                elif comebine_encoder_mode == 'let_me_do':
+                    pickle.dump(encoder_layers_value, "{}_{}_lmd.cache".format(path, current_batch_index))
+
+
+
+            output = self.sess.run()
+
+    def train(self, use_cache=False):
         data = self.dm.get_data('train')
-        self.sess.run(tf.global_variables_initializer())
+        # with tf.Session() as sess:
+        # self.sess.run(tf.global_variables_initializer())
+        # print("*******Before restore before finetune, All trainable variables********")
+        # print(len(tf.trainable_variables()))
+        # print("\n\nBefore restore, before finetune, the variable is:")
+        # a, b = self.sess.run(['bert/encoder/layer_11/output/dense/bias:0', 'classifier/output_layer/output_W:0'])
+        # print(a[:10])
+        # print(b[:10])
+        # print('\n\n')
+
+        # saver_saved_dir = self.FLAGS.output_dir + "/{}/saver/".format(self.FLAGS.task_name)
+        # saver_saved_path = saver_saved_dir + 'best2'
+        # builder_saved_dir = self.FLAGS.output_dir + "/{}/builder/".format(self.FLAGS.task_name)
+        # builder_saved_path = builder_saved_dir
+        # saver = tf.train.Saver()
+        # if use_cache and os.path.exists(saver_saved_dir):
+        #     print("restore model from {}".format(saver_saved_dir))
+        #     saver.restore(self.sess, saver_saved_path)
+        #     print("restore model done.")
+
+        if use_cache:
+            saver = self.restore_model(self.saver_saved_dir, self.saver_saved_path)
+        else:
+            saver = tf.train.Saver()
+
+        # print("*******After restore before finetune, All trainable variables********")
+        # print(len(tf.trainable_variables()))
+        # print("\n\nAfter restore, before finetune, the variable is:")
+        # a, b = self.sess.run(['bert/encoder/layer_11/output/dense/bias:0', 'classifier/output_layer/output_W:0'])
+        # print(a[:10])
+        # print(b[:10])
+        # print('\n\n')
+
+        best_acc = -1
         for epoch in range(self.FLAGS.epoch_num):
             print("Epoch: {}".format(epoch))
             start_time = time.time()
             train_loss, train_acc = 0.0, 0.0
             preds = []
             random.shuffle(data)
+            # for current_batch_index, start in enumerate(range(0, len(data), self.FLAGS.batch_size)):
             for current_batch_index, start in enumerate(range(0, len(data), self.FLAGS.batch_size)):
                 batch_data = data[start:start+self.FLAGS.batch_size]
                 input_ids, input_mask, segment_ids, label_ids = zip(*batch_data)
                 feed_dict = {'input_ids:0': input_ids, 'y:0': label_ids, 'dropout_keep_prob:0': self.FLAGS.dropout_keep_prob}
 
-                _, loss, acc, pred = self.sess.run(
-                    [self.train_op, self.loss, self.accuracy, self.predictions], feed_dict=feed_dict)
-                train_loss += loss
-                train_acc += acc
+                # print("1111111111")
+                # run_metadata = tf.RunMetadata()
+                # print("2222222")
+                # run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+                # print("3333333")
+                # _, loss, acc, pred = self.sess.run([self.train_op, self.loss, self.accuracy, self.predictions],
+                #                                          options=run_options, run_metadata=run_metadata,
+                #                                          feed_dict=feed_dict)
+                _, loss, acc, pred = self.sess.run([self.train_op, self.loss, self.accuracy, self.predictions],
+                                                         feed_dict=feed_dict)
+                train_loss += loss * len(batch_data)
+                train_acc += acc * len(batch_data)
                 preds.extend(list(pred))
 
                 if current_batch_index % self.FLAGS.batch_num_to_log == 0:
                     print(
                         "Epoch: {}, batch: {}, loss: {:.3f}, acc: {:.3f}".format(epoch, current_batch_index, loss, acc))
+                    # print("555555555")
+                    # tl = timeline.Timeline(run_metadata.step_stats)
+                    # ctf = tl.generate_chrome_trace_format()
+                    # with open('timeline_{}.json'.format(current_batch_index), 'w') as wd:
+                    #     wd.write(ctf)
+                    # print("*******After111 restore after finetune, All trainable variables********")
+                    # print(len(tf.trainable_variables()))
+                    # print("\n\nAfter restore, after finetune, the variable is:")
+                    # a, b = self.sess.run(
+                    #     ['bert/encoder/layer_11/output/dense/bias:0', 'classifier/output_layer/output_W:0'])
+                    # print(a[:10])
+                    # print(b[:10])
+                    # print('\n\n')
+
+                    loss, acc, pred = self.eval()
+                    if acc > best_acc:
+                        print("Save model to {}".format(self.FLAGS.output_dir))
+                        best_acc = acc
+                        saver.save(self.sess, self.saver_saved_path+'2')
+                        if os.path.exists(self.builder_saved_dir):
+                            import shutil
+                            shutil.rmtree(self.builder_saved_dir)
+                        builder = tf.saved_model.builder.SavedModelBuilder(self.builder_saved_path)
+                        builder.add_meta_graph_and_variables(self.sess, ['serve'])  # tf.local_variables_initializer())
+                        builder.save(True)
+                        print("Save model done.")
+
 
 
             #         # evaluate on validation set
@@ -230,24 +376,83 @@ class Classifier(TaskSpecificModel):
             #                                                                   1 - idx_1_wrong))
             # print(classification_report(label, preds, target_names=target_names))
             #
+            print("Train, loss: {:.3f}, acc: {:.3f}".format(train_loss/len(data), train_acc/len(data)))
+            loss, acc, pred = self.eval()
+            if acc > best_acc:
+                best_acc = acc
+                saver.save(self.sess, self.saver_saved_path+'2')
+                if os.path.exists(self.builder_saved_dir):
+                    import shutil
+                    shutil.rmtree(self.builder_saved_dir)
+                builder = tf.saved_model.builder.SavedModelBuilder(self.builder_saved_path)
+                builder.add_meta_graph_and_variables(self.sess, ['serve'])  # tf.local_variables_initializer())
+                builder.save(True)
+                print("save model done")
 
     def eval(self, texts_a=None, texts_b=None):
         if texts_a is not None:
             data = TextProcessor(self.FLAGS, texts_a, texts_b).data
         else:
             data = self.dm.get_data('eval')
-        input_ids, input_mask, segment_ids, label_ids = zip(*data)
-        feed_dict = {'input_ids:0': input_ids, 'dropout_keep_prob:0': 1.0, 'y:0': label_ids}
-        loss, acc, pred = self.sess.run([self.loss, self.accuracy, self.predictions], feed_dict=feed_dict)
-        print("loss: {:.3f}, acc: {:.3f}".format(loss, acc))
-        return pred
+        eval_loss, eval_acc = 0.0, 0.0
+        ground_ids, preds = [], []
+        for current_batch_index, start in enumerate(range(0, len(data), self.FLAGS.batch_size)):
+            batch_data = data[start:start + self.FLAGS.batch_size]
+            input_ids, input_mask, segment_ids, label_ids = zip(*batch_data)
+            feed_dict = {'input_ids:0': input_ids, 'dropout_keep_prob:0': 1.0, 'y:0': label_ids}
+            loss, acc, pred = self.sess.run([self.loss, self.accuracy, self.predictions], feed_dict=feed_dict)
+            eval_loss += loss * len(batch_data)
+            eval_acc += acc * len(batch_data)
+            preds.extend(list(pred))
+            ground_ids.extend(label_ids)
+        print("Evaluation, loss: {:.3f}, acc: {:.3f}".format(eval_loss/len(data), eval_acc/len(data)))
+        target_names = ['class 0', 'class 1']
+        print(classification_report(ground_ids, preds, target_names=target_names))
+        return eval_loss, eval_acc, preds
 
     def predict(self, texts_a=None, texts_b=None, dropout_keep_prob=1.0):
         if texts_a is not None:
             data = TextProcessor(self.FLAGS, texts_a, texts_b).data
         else:
             data = self.dm.get_data('test')
-        input_ids, input_mask, segment_ids, _ = zip(*data)
-        feed_dict = {'input_ids:0': input_ids, 'dropout_keep_prob:0': dropout_keep_prob}
-        preds, probs = self.sess.run([self.predictions, self.probs], feed_dict=feed_dict)
+        if not self.is_restored:
+            self.restore_model(self.saver_saved_dir, self.saver_saved_path)
+        preds, probs = [], []
+        for current_batch_index, start in enumerate(range(0, len(data), self.FLAGS.batch_size)):
+            batch_data = data[start:start + self.FLAGS.batch_size]
+            input_ids, input_mask, segment_ids, label_ids = zip(*batch_data)
+            feed_dict = {'input_ids:0': input_ids, 'dropout_keep_prob:0': dropout_keep_prob}
+            pred, prob = self.sess.run([self.predictions, self.probs], feed_dict=feed_dict)
+            preds.extend(list(pred))
+            probs.extend(list(prob))
+            if current_batch_index % self.FLAGS.batch_num_to_log == 0:
+                print("current batch is: %d" % current_batch_index)
+        with open("predict.result", 'w') as f:
+            for a, b in zip(preds, probs):
+                f.write("{}\t{}\n".format(a, b))
         return preds, probs
+    # def test_builder(self):
+    #     created_time = time.strftime("%Y-%m-%d-%H-%M-%S")
+    #     builder_saved_dir = self.FLAGS.output_dir + self.FLAGS.task_name
+    #     # builder_saved_path = "{}/{}-saved-model".format(builder_saved_dir, created_time)
+    #     builder_saved_path = builder_saved_dir
+    #     print("builder saved path is: {}".format(builder_saved_path))
+    #     if use_cache and os.path.exists(builder_saved_dir):
+    #         print("restore model from {}".format(builder_saved_dir))
+    #         # self.sess.reset()
+    #         # self.sess = tf.Session(graph=tf.Graph())
+    #         tf.saved_model.loader.load(self.sess, ['train'], builder_saved_dir)
+    #         print("restore model done.")
+    #
+    #         print("Save model to {}".format(builder_saved_dir))
+    #         best_acc = acc
+    #         if os.path.exists(builder_saved_dir):
+    #             import shutil
+    #             shutil.rmtree(builder_saved_dir)
+    #             print("Delete the builder_saved_dir done.")
+    #         builder = tf.saved_model.builder.SavedModelBuilder(builder_saved_path)
+    #         print("*******After2222 restore after finetune, All trainable variables********")
+    #         print(len(tf.trainable_variables()))
+    #         builder.add_meta_graph_and_variables(self.sess, ['train'])  # tf.local_variables_initializer())
+    #         builder.save(True)
+    #         print("save model done")

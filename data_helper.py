@@ -3,6 +3,8 @@ import tensorflow as tf
 import optimization
 import tokenization
 import csv
+import random
+import pickle
 
 def get_bert_flag(language='en'):
     flags = tf.app.flags
@@ -38,14 +40,19 @@ def get_bert_flag(language='en'):
                             "The vocabulary file that the BERT model was trained on.")
 
     # Other parameters
-    flags.DEFINE_string("task_name", None, "The name of the task to train.")
+    # flags.DEFINE_string("task_name", 'mrpc', "The name of the task to train.")
+    flags.DEFINE_string("task_name", 'qiqc', "The name of the task to train.")
 
     flags.DEFINE_string(
-        "output_dir", None,
+        "output_dir", './saved_model/',
         "The output directory where the model checkpoints will be written.")
 
+    # flags.DEFINE_string(
+    #     "data_dir", './data/glue_data/MRPC',
+    #     "The input data dir. Should contain the .tsv files (or other data files) "
+    #     "for the task.")
     flags.DEFINE_string(
-        "data_dir", './data/glue_data/MRPC',
+        "data_dir", './data/QIQC',
         "The input data dir. Should contain the .tsv files (or other data files) "
         "for the task.")
 
@@ -118,13 +125,13 @@ def get_classifier_flag():
 
     # train
 
-    flags.DEFINE_string("visible_gpus", "7", "visible gpus.")
+    flags.DEFINE_string("visible_gpus", "4", "visible gpus.")
     flags.DEFINE_float("learning_rate", 5e-5, "Learning rate. (default: 0.001)")
     flags.DEFINE_float("dropout_keep_prob", 0.9, "Dropout keep probability (default: 0.5)")
     flags.DEFINE_boolean("use_bn", False, "batch normalization? (default: False)")
     flags.DEFINE_integer("epoch_num", 3, "epoch number for training")
     flags.DEFINE_integer("batch_size", 64, "batch size for training")
-    flags.DEFINE_integer("batch_num_to_log", 5, "batch number to print loss")
+    flags.DEFINE_integer("batch_num_to_log", 5000, "batch number to print loss")
     flags.DEFINE_boolean("batch_with_same_length", False, "group training data with similar length? (default: True)")
     flags.DEFINE_boolean("use_random_valid", False, "random valid selection? (default: False)")
 
@@ -403,10 +410,10 @@ class DataProcessor(object):
     raise NotImplementedError()
 
   @classmethod
-  def _read_tsv(cls, input_file, quotechar=None):
+  def _read_tsv(cls, input_file, delimiter="\t", quotechar=None):
     """Reads a tab separated value file."""
     with tf.gfile.Open(input_file, "r") as f:
-      reader = csv.reader(f, delimiter="\t", quotechar=quotechar)
+      reader = csv.reader(f, delimiter=delimiter, quotechar=quotechar)
       lines = []
       for line in reader:
         lines.append(line)
@@ -661,6 +668,102 @@ class MrpcProcessor(DataProcessor):
         return result
 
 
+class QiqcProcessor(DataProcessor):  # Quora Insincere Questions Classification
+    """Processor for the QIQC data set."""
+    def __init__(self, FLAGS):
+        self.FLAGS = FLAGS
+        self.label_list = self.get_labels()
+        self.data_dir = self.FLAGS.data_dir
+        self.label_num = 2
+        self.train_data = self.get_train_examples(self.data_dir)
+        # random.shuffle(self.train_data)
+
+    # def _read_tsv(self, input_file, delimiter=",", quotechar=None):
+    #     """Reads a tab separated value file."""
+    #     with open(input_file, "r", encoding='utf8') as f:
+    #         reader = csv.reader(f, delimiter=",", quotechar=quotechar)
+    #         lines = []
+    #         for line in reader:
+    #             lines.append(line)
+    #         return lines
+
+    def get_train_examples(self, data_dir):
+        """See base class."""
+        data_cached_path = data_dir + '/train.cache'
+        try:
+            data = pickle.load(open(data_cached_path, 'rb'))
+            print("Load train data from cache successfully.")
+        except:
+            path = os.path.join(data_dir, "train.csv")
+            print("The train path is: %s" % path)
+            data = self._create_examples(self._read_tsv(path, ',', '"'), "train")
+            pickle.dump(data, open(data_cached_path, "wb"))
+            print("Dump train data to cache successfully.")
+        return data
+
+    # def get_dev_examples(self, data_dir):
+    #     """See base class."""
+    #     return self._create_examples(
+    #     self._read_tsv(os.path.join(data_dir, "dev.csv")), "dev")
+
+    def get_test_examples(self, data_dir):
+        """See base class."""
+        data_cached_path = data_dir + '/test.cache'
+        try:
+            data = pickle.load(open(data_cached_path, 'rb'))
+            print("Load test data from cache successfully.")
+        except:
+            path = os.path.join(data_dir, "test.csv")
+            print("The test path is: %s" % path)
+            data = self._create_examples(self._read_tsv(path, ',', '"'), "test")
+            pickle.dump(data, open(data_cached_path, "wb"))
+            print("Dump test data to cache successfully.")
+        return data
+
+
+    def get_labels(self):
+        """See base class."""
+        return ["0", "1"]
+
+    def _create_examples(self, lines, set_type):
+        """Creates examples for the training and dev sets."""
+        examples = []
+        for (i, line) in enumerate(lines):
+            if i == 0:
+                continue
+            guid = "%s-%s" % (set_type, i)
+            if set_type == "test":
+                if len(line) != 2:
+                    print("Something wrong happens at the %dth row!" % i)
+                    continue
+                label = "0"
+            else:
+                if len(line) != 3:
+                    print("Something wrong happens at the %dth row!" % i)
+                    continue
+                label = tokenization.convert_to_unicode(line[2])
+            text_a = tokenization.convert_to_unicode(line[1])
+            # text_b = tokenization.convert_to_unicode(line[4])
+            examples.append(
+              InputExample(guid=guid, text_a=text_a, text_b=None, label=label))
+        return examples
+
+    def get_data(self, data_style='train', split=0.9):
+        assert data_style in ['train', 'eval', 'test'], "data_style must be train, eval or test"
+        split_index = int(split * len(self.train_data))
+        if data_style == 'train':
+            examples = self.train_data[:split_index]
+        elif data_style == 'eval':
+            examples = self.train_data[split_index:]
+        else:
+            examples = self.get_test_examples(self.data_dir)
+        tokenizer = tokenization.FullTokenizer(vocab_file=self.FLAGS.vocab_file, do_lower_case=self.FLAGS.do_lower_case)
+        result = []
+        for i, example in enumerate(examples):
+            feature = convert_single_example(i, example, self.label_list, self.FLAGS.max_seq_length, tokenizer)
+            result.append((feature.input_ids, feature.input_mask, feature.segment_ids, feature.label_id))
+        return result
+
 
 class ColaProcessor(DataProcessor):
   """Processor for the CoLA data set (GLUE version)."""
@@ -738,3 +841,27 @@ def get_data(FLAGS):
         return convert_examples_to_features(train_examples, label_list, FLAGS.max_seq_length, tokenizer)
 
 
+def build_data_processor(FLAGS, path_or_data, col_num):
+    # assert isinstance(path_or_data, (str, list, MnliProcessor, ColaProcessor, MrpcProcessor, ClassifierProcessor,
+    #                                  XnliProcessor)), "Make sure path_or_data is a filepath or list of data!"
+    assert isinstance(path_or_data, (str, list)), "Make sure path_or_data is a filepath or list of data!"
+    if path_or_data in ['mnli', 'cola', 'mrpc', 'xnli', 'qiqc']:
+        processors = {
+            "cola": ColaProcessor,
+            "mnli": MnliProcessor,
+            "mrpc": MrpcProcessor,
+            "xnli": XnliProcessor,
+            "qiqc": QiqcProcessor
+        }
+        return processors[path_or_data](FLAGS)
+    if isinstance(path_or_data, str):
+        return ClassifierProcessor(FLAGS, path_or_data, col_num)
+    if isinstance(path_or_data, list):
+        if col_num == 2:
+            texts_a, labels = zip(*path_or_data)
+            texts_b = None
+        elif col_num == 3:
+            texts_a, texts_b, labels = zip(*path_or_data)
+        else:
+            raise ValueError
+        return TextProcessor(FLAGS, texts_a, texts_b, labels)

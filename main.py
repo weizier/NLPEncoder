@@ -21,17 +21,21 @@ def main():
 
 
 def finetune():
-    data = [('专业NLP请认准知文品牌！','dfdf', '1'), ('我今天特别开心','dfdf', '1'), ('糟糕','fddfdsf', '0')]
-    my_classifier = Classifier(data, 'bert', language='ch', col_num=3)
+    data = [('专业NLP请认准知文品牌！', 'dfdf', '1'), ('我今天特别开心', 'dfdf', '1'), ('糟糕', 'fddfdsf', '0')]
+    my_classifier = Classifier('bert', language='ch', comebine_encoder_mode='attention', path_or_data=data, col_num=3)
     my_classifier.train()
     my_classifier.predict(texts_a=['专业NLP请认准知文品牌！'])
-
 
 def finetune_mrpc():
-    # data_processor = MrpcProcessor(get_bert_flag())
-    my_classifier = Classifier(None, 'bert', language='en', col_num=3, encoder_layer='last')
-    my_classifier.train()
+    my_classifier = Classifier('bert', language='en', comebine_encoder_mode='attention', finetune_scope='classifier', path_or_data='mrpc', col_num=3)
+    my_classifier.train(True)
     my_classifier.predict(texts_a=['专业NLP请认准知文品牌！'])
+    my_classifier.eval()
+
+def finetune_qiqc():
+    my_classifier = Classifier('bert', language='en', comebine_encoder_mode='attention', feature_mode='mlp', finetune_scope='all', path_or_data='qiqc', col_num=2)
+    my_classifier.train(False)
+    # my_classifier.predict(texts_a=['专业NLP请认准知文品牌！'])
     my_classifier.eval()
 
 def tokenization():
@@ -51,5 +55,6 @@ def tokenization():
 
 if __name__ == '__main__':
     # tf.app.run()
-    finetune()
+    # finetune()
     # finetune_mrpc()
+    finetune_qiqc()
