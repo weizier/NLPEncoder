@@ -33,10 +33,14 @@ def finetune_mrpc():
     my_classifier.eval()
 
 def finetune_qiqc():
-    my_classifier = Classifier('bert', language='en', comebine_encoder_mode='attention', feature_mode='mlp', finetune_scope='all', path_or_data='qiqc', col_num=2)
-    my_classifier.train(False)
+    my_classifier = Classifier('bert', language='en', comebine_encoder_mode='attention', feature_mode='attention', finetune_scope='all', path_or_data='qiqc', col_num=2, init_from_check=False)
+    my_classifier.train(balance=False)
     # my_classifier.predict(texts_a=['专业NLP请认准知文品牌！'])
-    my_classifier.eval()
+    # my_classifier.eval()
+    my_classifier.is_restored = False
+    preds, probs = my_classifier.predict()
+    res = [i for i, n in enumerate(preds) if n == 1]
+    print(res)
 
 def tokenization():
     from data_helper import get_bert_flag

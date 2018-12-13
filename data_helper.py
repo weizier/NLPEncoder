@@ -41,7 +41,7 @@ def get_bert_flag(language='en'):
 
     # Other parameters
     # flags.DEFINE_string("task_name", 'mrpc', "The name of the task to train.")
-    flags.DEFINE_string("task_name", 'qiqc', "The name of the task to train.")
+    flags.DEFINE_string("task_name", 'qiqc_no_init', "The name of the task to train.")
 
     flags.DEFINE_string(
         "output_dir", './saved_model/',
@@ -125,12 +125,13 @@ def get_classifier_flag():
 
     # train
 
-    flags.DEFINE_string("visible_gpus", "4", "visible gpus.")
-    flags.DEFINE_float("learning_rate", 5e-5, "Learning rate. (default: 0.001)")
+    flags.DEFINE_string("visible_gpus", "1", "visible gpus.")
+    flags.DEFINE_float("learning_rate", 3e-5, "Learning rate. (default: 0.001)")
     flags.DEFINE_float("dropout_keep_prob", 0.9, "Dropout keep probability (default: 0.5)")
     flags.DEFINE_boolean("use_bn", False, "batch normalization? (default: False)")
-    flags.DEFINE_integer("epoch_num", 3, "epoch number for training")
-    flags.DEFINE_integer("batch_size", 64, "batch size for training")
+    flags.DEFINE_integer("epoch_num", 10, "epoch number for training")
+    flags.DEFINE_integer("epoch_cache_num", 3, "epoch number for training process on cache embedding to accelerate.")
+    flags.DEFINE_integer("batch_size", 32, "batch size for training")
     flags.DEFINE_integer("batch_num_to_log", 5000, "batch number to print loss")
     flags.DEFINE_boolean("batch_with_same_length", False, "group training data with similar length? (default: True)")
     flags.DEFINE_boolean("use_random_valid", False, "random valid selection? (default: False)")
@@ -757,12 +758,33 @@ class QiqcProcessor(DataProcessor):  # Quora Insincere Questions Classification
             examples = self.train_data[split_index:]
         else:
             examples = self.get_test_examples(self.data_dir)
-        tokenizer = tokenization.FullTokenizer(vocab_file=self.FLAGS.vocab_file, do_lower_case=self.FLAGS.do_lower_case)
-        result = []
-        for i, example in enumerate(examples):
-            feature = convert_single_example(i, example, self.label_list, self.FLAGS.max_seq_length, tokenizer)
-            result.append((feature.input_ids, feature.input_mask, feature.segment_ids, feature.label_id))
+
+        data_cached_path = self.data_dir + '/{}_processed.cache'.format(data_style)
+        try:
+            result = pickle.load(open(data_cached_path, 'rb'))
+            print("Load {}_processed data from cache successfully.".format(data_style))
+        except:
+            print("Now begin to process raw data...")
+            tokenizer = tokenization.FullTokenizer(vocab_file=self.FLAGS.vocab_file, do_lower_case=self.FLAGS.do_lower_case)
+            result = []
+            for i, example in enumerate(examples):
+                feature = convert_single_example(i, example, self.label_list, self.FLAGS.max_seq_length, tokenizer)
+                result.append((feature.input_ids, feature.input_mask, feature.segment_ids, feature.label_id))
+            pickle.dump(result, open(data_cached_path, "wb"))
+            print("Dump {}_processed data to cache successfully.".format(data_style))
         return result
+
+    def balance_data(self, data):
+        print("Begin to up sampling postive data...")
+        pos_data, neg_data = [], []
+        for d in data:
+            if d[-1]:
+                pos_data.append(d)
+            else:
+                neg_data.append(d)
+        upsample = int(len(neg_data) / len(pos_data))
+        print('up sampling to {}'.format(upsample))
+        return pos_data * upsample + neg_data
 
 
 class ColaProcessor(DataProcessor):

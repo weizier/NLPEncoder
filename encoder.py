@@ -12,11 +12,11 @@ class NLPEncoder(object):
     1. fit all the layers of encoder, then encoder is a feature extraction;
     2. fit some certain layers and then train other layers
     """
-    def __init__(self, FLAGS=None, model_name='bert', mode='test', language='en'):
+    def __init__(self, FLAGS=None, model_name='bert', mode='test', language='en', init_from_check=True):
         self.is_training = True if mode == 'train' else False
         if model_name == 'bert':
             self.FLAGS = get_bert_flag(language=language)[1] if FLAGS is None else FLAGS
-            self.create_initialize_bert(self.FLAGS.bert_config_file)
+            self.create_initialize_bert(self.FLAGS.bert_config_file, init_from_check)
 
         # if mode == 'train':
         #     # TODO: return the last layer, then you can append a task specific model on it
@@ -77,23 +77,25 @@ class NLPEncoder(object):
 
         # sess.run([model.get_pooled_output()], feed_dict={'input_ids:0':[[1,2,3]]})
 
-    def create_initialize_bert(self, model_config):
+    def create_initialize_bert(self, model_config, init_from_check):
         tf.logging.set_verbosity(tf.logging.WARN)
         # self.sess = tf.Session()
         bert_config = BertConfig.from_json_file(model_config)
         self.model = BertModel(config=bert_config)
 
-        tvars = tf.trainable_variables()
-        assignment_map, initialized_variable_names = get_assignment_map_from_checkpoint(tvars,
-                                                                                             self.FLAGS.init_checkpoint)
-        tf.train.init_from_checkpoint(self.FLAGS.init_checkpoint, assignment_map)
-        # self.sess.run(tf.global_variables_initializer())
-        # tf.logging.info("**** Trainable Variables ****")
-        # for var in tvars:
-        #     init_string = ""
-        #     if var.name in initialized_variable_names:
-        #         init_string = ", *INIT_FROM_CKPT*"
-        #     tf.logging.info("  name = %s, shape = %s%s", var.name, var.shape, init_string)
+        if init_from_check:
+            print("Init Encoder from init_checkpoint...")
+            tvars = tf.trainable_variables()
+            assignment_map, initialized_variable_names = get_assignment_map_from_checkpoint(tvars,
+                                                                                                 self.FLAGS.init_checkpoint)
+            tf.train.init_from_checkpoint(self.FLAGS.init_checkpoint, assignment_map)
+            # self.sess.run(tf.global_variables_initializer())
+            # tf.logging.info("**** Trainable Variables ****")
+            # for var in tvars:
+            #     init_string = ""
+            #     if var.name in initialized_variable_names:
+            #         init_string = ", *INIT_FROM_CKPT*"
+            #     tf.logging.info("  name = %s, shape = %s%s", var.name, var.shape, init_string)
 
     def get_layers(self, layers=None):
         """
