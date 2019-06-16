@@ -5,14 +5,14 @@ from task_specific_model import *
 
 def main():
     from encoder import NLPEncoder
-    encoder = NLPEncoder('bert')
+    encoder = NLPEncoder(language='ch')
     text = '专业NLP请认准知文品牌！'
-    embedding = encoder.encode([text])
+
     # 1. encode one single text
     embedding = encoder.encode([text])
 
     # 2. encode a batch texts
-    embedding = encoder.encode([text], [text])
+    embedding = encoder.encode([text, text])
 
     # 3. fine-tune the model
     data = [('专业NLP请认准知文品牌！', '1'), ('我今天特别开心', '1'), ('糟糕', '0')]
@@ -61,4 +61,5 @@ if __name__ == '__main__':
     # tf.app.run()
     # finetune()
     # finetune_mrpc()
-    finetune_qiqc()
+    # finetune_qiqc()
+    main()
